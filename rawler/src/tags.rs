@@ -643,7 +643,4 @@ pub enum DngTag {
   IlluminantData1 = 52533,
   IlluminantData2 = 52534,
   IlluminantData3 = 52535,
-
-  // 1.7.1
-  ColumnInterleaveFactor = 52547,
 }

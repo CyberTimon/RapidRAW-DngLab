@@ -9,7 +9,6 @@ use crate::Result;
 use crate::cfa::PlaneColor;
 use crate::imgop::raw::{correct_blacklevel, correct_blacklevel_cfa};
 use crate::imgop::{convert_from_f32_scaled_u16, convert_to_f32_unscaled};
-use crate::pixarray::SubPixel;
 use crate::{
   CFA,
   decoders::*,
@@ -41,7 +40,7 @@ impl WhiteLevel {
     if bits > 32 {
       panic!("Whitelevel can only be calculated for max. 32 bits, but {} bits given", bits);
     }
-    let level: u32 = ((1_u64 << bits) - 1) as u32;
+    let level: u32 = (1 << bits) - 1;
     Self(vec![level; cpp])
   }
 
@@ -266,10 +265,7 @@ impl RawImageData {
 }
 
 impl RawImage {
-  pub fn calc_black_levels<T>(cfa: &CFA, blackareas: &[Rect], width: usize, _height: usize, image: &[T]) -> Option<BlackLevel>
-  where
-    T: SubPixel,
-  {
+  pub fn calc_black_levels(cfa: &CFA, blackareas: &[Rect], width: usize, _height: usize, image: &[u16]) -> Option<BlackLevel> {
     let x = cfa.width * cfa.height;
     if x == 0 {
       return None;
@@ -290,13 +286,13 @@ impl RawImage {
           for col in area.p.x..area.p.x + area.d.w {
             //let color = cfa.color_at(row, col);
             let color = (row % cfa.height) * cfa.width + (col % cfa.width);
-            samples[color].avg += image[row * width + col].as_f32();
+            samples[color].avg += image[row * width + col] as f32;
             samples[color].count += 1;
           }
         }
       }
 
-      let blacklevels: Vec<f32> = samples.into_iter().map(|s| (s.avg / s.count as f32)).collect();
+      let blacklevels: Vec<u16> = samples.into_iter().map(|s| (s.avg / s.count as f32) as u16).collect();
 
       debug!("Calculated blacklevels: {:?}", blacklevels);
       // TODO: support other then RGGB levels
@@ -355,7 +351,7 @@ impl RawImage {
         if dummy {
           Some(BlackLevel::default())
         } else {
-          Self::calc_black_levels::<u16>(&cam.cfa, &blackareas, image.width, image.height, image.pixels())
+          Self::calc_black_levels(&cam.cfa, &blackareas, image.width, image.height, image.pixels())
         }
       })
       .unwrap_or_else(|| BlackLevel::zero(1, 1, cpp));
@@ -379,95 +375,6 @@ impl RawImage {
       bps: cam.real_bps,
       wb_coeffs,
       data: RawImageData::Integer(image.into_inner()),
-      blacklevel,
-      whitelevel,
-      xyz_to_cam: cam.xyz_to_cam,
-      photometric,
-      active_area,
-      crop_area,
-      blackareas,
-      orientation: Orientation::Normal, //cam.orientation, // TODO fixme
-      color_matrix: cam.color_matrix,
-      dng_tags: HashMap::new(),
-    }
-  }
-
-  #[doc(hidden)]
-  pub fn new_with_data(
-    cam: Camera,
-    image: RawImageData,
-    sample_width: usize,
-    height: usize,
-    cpp: usize,
-    wb_coeffs: [f32; 4],
-    photometric: RawPhotometricInterpretation,
-    blacklevel: Option<BlackLevel>,
-    whitelevel: Option<WhiteLevel>,
-    dummy: bool,
-  ) -> RawImage {
-    //assert_eq!(image.width % cpp, 0);
-    //assert_eq!(dummy, !image.is_initialized());
-    let pixel_width = sample_width / cpp;
-
-    let mut blackareas: Vec<Rect> = Vec::new();
-
-    let active_area = cam.active_area.map(|area| Rect::new_with_borders(Dim2::new(pixel_width, height), &area));
-
-    let blackarea_base = active_area.unwrap_or_else(|| Rect::new(Point::zero(), Dim2::new(sample_width, height)));
-
-    // For now, we only use masked areas when cpp is 1. For color images (RGB)
-    // like Canon SRAW, we ignore it (it isn't provided anyway).
-    if cpp == 1 {
-      // Build black areas
-      // First value (.0) is start and (.1) is length!
-      if let Some(ah) = cam.blackareah {
-        blackareas.push(Rect::new_with_points(
-          Point::new(blackarea_base.p.x, ah.0),
-          Point::new(blackarea_base.p.x + blackarea_base.d.w, ah.0 + ah.1),
-        ));
-      }
-      if let Some(av) = cam.blackareav {
-        blackareas.push(Rect::new_with_points(
-          Point::new(av.0, blackarea_base.p.y),
-          Point::new(av.0 + av.1, blackarea_base.p.y + blackarea_base.d.h),
-        ));
-      }
-    }
-
-    let blacklevel = cam
-      .make_blacklevel(cpp)
-      .or_else(|| if cam.find_hint("invalid_blacklevel") { None } else { blacklevel })
-      .or_else(|| {
-        if dummy {
-          Some(BlackLevel::default())
-        } else {
-          match &image {
-            RawImageData::Integer(pix) => Self::calc_black_levels(&cam.cfa, &blackareas, sample_width, height, pix),
-            RawImageData::Float(pix) => Self::calc_black_levels(&cam.cfa, &blackareas, sample_width, height, pix),
-          }
-        }
-      })
-      .unwrap_or_else(|| BlackLevel::zero(1, 1, cpp));
-
-    let whitelevel = cam
-      .make_whitelevel(cpp)
-      .or(whitelevel)
-      .unwrap_or_else(|| panic!("Need whitelvel in config: {}", cam.clean_model));
-
-    let crop_area = cam.crop_area.map(|area| Rect::new_with_borders(Dim2::new(pixel_width, height), &area));
-
-    RawImage {
-      camera: cam.clone(),
-      make: cam.make.clone(),
-      model: cam.model.clone(),
-      clean_make: cam.clean_make.clone(),
-      clean_model: cam.clean_model.clone(),
-      width: pixel_width,
-      height: height,
-      cpp,
-      bps: cam.real_bps,
-      wb_coeffs,
-      data: image,
       blacklevel,
       whitelevel,
       xyz_to_cam: cam.xyz_to_cam,
@@ -695,9 +602,20 @@ impl RawImage {
   /// Returns the CFA pattern after the crop has been applied (and thus the pattern
   /// potentially shifted)
   pub fn cropped_cfa(&self) -> CFA {
-    //self.cfa.shift(self.crops[3], self.crops[0])
-    todo!()
-    // Need to specify which crop, active or DefaultCrop
+    // We implement it to use the active_area, which is the most common use case.
+    // This fixes a major source of bugs for consumers of the rawler library.
+    if let Some(crop) = self.active_area {
+        if let RawPhotometricInterpretation::Cfa(config) = &self.photometric {
+            return config.cfa.shift(crop.p.x, crop.p.y);
+        }
+    }
+    
+    // Fallback for non-CFA images or images without a specific crop area.
+    if let RawPhotometricInterpretation::Cfa(config) = &self.photometric {
+        config.cfa.clone()
+    } else {
+        CFA::default()
+    }
   }
 
   /// Checks if the image is monochrome
