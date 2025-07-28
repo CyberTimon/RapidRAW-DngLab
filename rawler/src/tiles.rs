@@ -116,4 +116,76 @@ mod tests {
 
     Ok(())
   }
+
+  #[test]
+  fn test_par_bridge() {
+    #[rustfmt::skip]
+    let mut vec = vec![
+      1,  2,    3,  4,   5,  6,
+      7,  8,    9, 10,  11, 12,
+
+      13, 14,  15, 16,  17, 18,
+      19, 20,  21, 22,  23, 24,
+    ];
+    let cpp = 1;
+    let tiles = vec.into_tiles_iter_mut(6, cpp, 2, 2);
+    assert!(tiles.is_ok());
+    let tiles = tiles.expect("Tiling failed");
+
+    tiles.par_bridge().for_each(|tile| {
+      tile.into_iter_mut().for_each(|line| {
+        for p in line {
+          *p *= 2;
+        }
+      });
+    });
+  }
+
+  #[test]
+  fn test_par_bridge_without_collect() {
+    #[rustfmt::skip]
+    let mut vec = vec![
+      1,  2,    3,  4,   5,  6,
+      7,  8,    9, 10,  11, 12,
+
+      13, 14,  15, 16,  17, 18,
+      19, 20,  21, 22,  23, 24,
+    ];
+    let expected_vec: Vec<u16> = vec.iter().map(|p| p * 2).collect();
+    let cpp = 1;
+    let tiles = vec.into_tiles_iter_mut(6, cpp, 2, 2);
+    assert!(tiles.is_ok());
+
+    let tiles = tiles.expect("Tiling failed");
+
+    tiles.par_bridge().for_each(|tile| {
+      tile.into_iter_mut().for_each(|line| {
+        for p in line {
+          *p *= 2;
+        }
+      });
+    });
+
+    assert_eq!(vec, expected_vec);
+  }
+
+  #[test]
+  fn test_tiles_mut() {
+    #[rustfmt::skip]
+    let mut vec = vec![
+      1,  2,    3,  4,   5,  6,
+      7,  8,    9, 10,  11, 12,
+
+      13, 14,  15, 16,  17, 18,
+      19, 20,  21, 22,  23, 24,
+    ];
+    let cpp = 1;
+    let tiles = vec.into_tiles_iter_mut(6, cpp, 2, 2);
+    assert!(tiles.is_ok());
+    let tiles = tiles.expect("Tiling failed");
+
+    let tiles: Vec<Tile<u16>> = tiles.collect();
+
+    assert_eq!(tiles.len(), 6);
+  }
 }

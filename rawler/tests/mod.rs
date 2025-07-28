@@ -4,3 +4,5 @@ mod cameras;
 mod common;
 #[cfg(feature = "samplecheck")]
 mod issues;
+#[cfg(feature = "samplecheck")]
+mod samples;
