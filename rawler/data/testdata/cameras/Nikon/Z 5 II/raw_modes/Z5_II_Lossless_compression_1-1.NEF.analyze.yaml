@@ -1,40 +1,43 @@
 ---
 file:
-  fileSize: 1993198728
-  fileName: Canon EOS R5 C_Standard (RAW)_ISO_100.CRM
-  digest: ac94654f0df24f42d198c872edc02001
+  fileSize: 20220027
+  fileName: Z5_II_Lossless_compression_1-1.NEF
+  digest: ad8edca071fdf7ce81cf91a786467b03
 data:
   metadata:
     rawParams:
-      rawWidth: 8224
-      rawHeight: 4336
+      rawWidth: 4048
+      rawHeight: 4040
       bitDepth: 16
       cropArea:
         p:
-          x: 16
-          y: 8
+          x: 8
+          y: 4
         d:
-          w: 8192
-          h: 4320
+          w: 4032
+          h: 4032
       activeArea:
         p:
-          x: 16
-          y: 8
+          x: 0
+          y: 0
         d:
-          w: 8192
-          h: 4320
+          w: 4048
+          h: 4040
       blacklevels:
         levels:
-          - 0/1
+          - 1008/1
+          - 1008/1
+          - 1008/1
+          - 1008/1
         cpp: 1
-        width: 1
-        height: 1
+        width: 2
+        height: 2
       whitelevels:
-        - 65535
+        - 15892
       wbCoeffs:
+        - 1.6328125
         - 1.0
-        - 1.0
-        - 1.0
+        - 1.4042969
         - ~
     rawMetadata:
       exif:
@@ -42,49 +45,49 @@ data:
         copyright: ""
         artist: ""
         lens_spec:
+          - 24/1
           - 70/1
-          - 200/1
-          - 28/10
-          - 28/10
-        exposure_time: 1/50
-        fnumber: 28/10
-        aperture_value: 2304/768
+          - 4/1
+          - 4/1
+        exposure_time: 10/4000
+        fnumber: 710/100
+        aperture_value: ~
         brightness_value: ~
         iso_speed_ratings: 100
         iso_speed: ~
         recommended_exposure_index: 100
         sensitivity_type: 2
-        exposure_bias: 0/100
-        date_time_original: "2023:04:20 21:41:40"
-        create_date: "2023:04:20 21:41:40"
-        modify_date: "2023:04:20 21:41:40"
-        exposure_program: 1
+        exposure_bias: 0/6
+        date_time_original: "2025:04:27 17:57:22"
+        create_date: "2025:04:27 17:57:22"
+        modify_date: "2025:04:27 17:57:22"
+        exposure_program: 0
         timezone_offset: ~
-        offset_time: "+08:00"
-        offset_time_original: "+08:00"
-        offset_time_digitized: "+08:00"
-        sub_sec_time: "26"
-        sub_sec_time_original: "26"
-        sub_sec_time_digitized: "26"
-        shutter_speed_value: 4334/768
+        offset_time: "+02:00"
+        offset_time_original: "+02:00"
+        offset_time_digitized: "+02:00"
+        sub_sec_time: "48"
+        sub_sec_time_original: "48"
+        sub_sec_time_digitized: "48"
+        shutter_speed_value: ~
         max_aperture_value: ~
         subject_distance: ~
-        metering_mode: 2
-        light_source: ~
+        metering_mode: 5
+        light_source: 0
         flash: 0
-        focal_length: 700/10
+        focal_length: 240/10
         image_number: ~
-        color_space: 1
+        color_space: ~
         flash_energy: ~
-        exposure_mode: 1
+        exposure_mode: 0
         white_balance: 0
         scene_capture_type: 0
-        subject_distance_range: ~
-        owner_name: ""
-        serial_number: "655519400209"
-        lens_serial_number: "8720000533"
-        lens_make: Canon
-        lens_model: RF 70-200mm F2.8L IS USM
+        subject_distance_range: 0
+        owner_name: ~
+        serial_number: "6001281"
+        lens_serial_number: "20508571"
+        lens_make: Nikon
+        lens_model: Nikkor Z 24-70mm f/4 S
         gps:
           gps_version_id:
             - 2
@@ -123,26 +126,26 @@ data:
           gps_differential: ~
           gps_h_positioning_error: ~
         user_comment: ~
-      model: EOS R5 C
-      make: Canon
+      model: Z 5 II
+      make: Nikon
       lens:
         identifiers:
-          name: RF70-200mm F2.8 L IS USM
+          name: ~
           id:
-            - 61182
-            - 266
+            - 1
+            - 0
           nikon_id: ~
           olympus_id: ~
-        mount: rf-mount
-        lens_make: Canon
-        lens_model: RF 70-200mm F2.8L IS USM
+        mount: Z-mount
+        lens_make: Nikon
+        lens_model: Nikkor Z 24-70mm f/4 S
         focal_range:
+          - 24/1
           - 70/1
-          - 200/1
         aperture_range:
-          - 28/10
-          - 28/10
-        lens_name: Canon RF 70-200mm F2.8L IS USM
-      unique_image_id: 267338395743086803297490183568139042440
+          - 4/1
+          - 4/1
+        lens_name: Nikon Nikkor Z 24-70mm f/4 S
+      unique_image_id: ~
       rating: ~
 
