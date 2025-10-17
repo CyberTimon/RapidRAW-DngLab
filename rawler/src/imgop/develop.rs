@@ -15,6 +15,7 @@ use super::{
   Dim2, Rect, convert_from_f32_scaled_u16,
   raw::{map_3ch_to_rgb, map_4ch_to_rgb},
   sensor::bayer::{Demosaic, bilinear::Bilinear4Channel, ppg::PPGDemosaic},
+  sensor::xtrans::demosaic::{XTransDemosaic, XTransSuperpixelDemosaic},
   xyz::Illuminant,
 };
 
@@ -27,6 +28,17 @@ pub enum ProcessingStep {
   Calibrate,
   CropDefault,
   SRgb,
+}
+
+/// The demosaicing algorithm to use.
+#[derive(PartialEq, Eq, Debug, Clone, Copy, Default)]
+pub enum DemosaicAlgorithm {
+  /// High-quality demosaicing (PPG for Bayer, Full-Res for X-Trans).
+  #[default]
+  Quality,
+  /// High-speed demosaicing using a superpixel algorithm (e.g. for thumbnails).
+  /// This reduces image dimensions by a factor of four (quarter width and height).
+  Speed,
 }
 
 pub struct RawDevelopBuilder {}
@@ -76,6 +88,7 @@ impl Intermediate {
 #[derive(Clone)]
 pub struct RawDevelop {
   pub steps: Vec<ProcessingStep>,
+  pub demosaic_algorithm: DemosaicAlgorithm,
 }
 
 impl Default for RawDevelop {
@@ -90,6 +103,7 @@ impl Default for RawDevelop {
         ProcessingStep::CropDefault,
         ProcessingStep::SRgb,
       ],
+      demosaic_algorithm: DemosaicAlgorithm::default(),
     }
   }
 }
@@ -136,18 +150,40 @@ impl RawDevelop {
     if self.steps.contains(&ProcessingStep::Demosaic) {
       intermediate = match &rawimage.photometric {
         RawPhotometricInterpretation::Cfa(config) => {
-          if let Intermediate::Monochrome(pixels) = intermediate {
+          if let Intermediate::Monochrome(ref pixels) = intermediate {
             let roi = if self.steps.contains(&ProcessingStep::CropActiveArea) {
               rawimage.active_area.unwrap_or(pixels.rect())
             } else {
               pixels.rect()
             };
             if config.cfa.is_rgb() {
-              let ppg = PPGDemosaic::new();
-              Intermediate::ThreeColor(ppg.demosaic(&pixels, &config.cfa, &config.colors, roi))
+              // Check if this is an X-Trans sensor (6x6 pattern) 
+              if config.cfa.width == 6 && config.cfa.height == 6 {
+                match self.demosaic_algorithm {
+                  DemosaicAlgorithm::Quality => {
+                    let xtrans_demosaic = XTransDemosaic::new();
+                    Intermediate::ThreeColor(xtrans_demosaic.demosaic(pixels, &config.cfa, &config.colors, roi))
+                  }
+                  DemosaicAlgorithm::Speed => {
+                    let xtrans_demosaic = XTransSuperpixelDemosaic::new();
+                    Intermediate::ThreeColor(xtrans_demosaic.demosaic(pixels, &config.cfa, &config.colors, roi))
+                  }
+                }
+              } else {
+                match self.demosaic_algorithm {
+                  DemosaicAlgorithm::Quality => {
+                    let ppg = PPGDemosaic::new();
+                    Intermediate::ThreeColor(ppg.demosaic(pixels, &config.cfa, &config.colors, roi))
+                  }
+                  DemosaicAlgorithm::Speed => {
+                    let ppg = PPGDemosaic::new();
+                    Intermediate::ThreeColor(ppg.demosaic(pixels, &config.cfa, &config.colors, roi))
+                  }
+                }
+              }
             } else if config.cfa.unique_colors() == 4 {
               let linear = Bilinear4Channel::new();
-              Intermediate::FourColor(linear.demosaic(&pixels, &config.cfa, &config.colors, roi))
+              Intermediate::FourColor(linear.demosaic(pixels, &config.cfa, &config.colors, roi))
             } else {
               todo!()
             }
