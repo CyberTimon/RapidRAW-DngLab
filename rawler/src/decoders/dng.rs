@@ -429,8 +429,8 @@ impl<'a> DngDecoder<'a> {
       Ok(())
     };
 
-    read_matrix(DngTag::CalibrationIlluminant1, DngTag::ColorMatrix1)?;
-    read_matrix(DngTag::CalibrationIlluminant2, DngTag::ColorMatrix2)?;
+    let _ = read_matrix(DngTag::CalibrationIlluminant1, DngTag::ColorMatrix1);
+    let _ = read_matrix(DngTag::CalibrationIlluminant2, DngTag::ColorMatrix2);
     // TODO: add 3
 
     Ok(result)
