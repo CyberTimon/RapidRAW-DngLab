@@ -114,21 +114,25 @@ impl IFD {
     let mut sub = HashMap::new();
     let mut next_pos = reader.position()?;
     debug!("Parse entries");
-    
-    for _ in 0..entry_count {
-      // Safety check: If we can't seek to the next entry, stop immediately.
-      if let Err(_) = reader.goto(next_pos) {
-          log::warn!("Truncated IFD: Could not seek to next entry position. Stopping parse.");
+    let mut consecutive_errors = 0;
+
+    for i in 0..entry_count {
+      if i as usize >= MAX_IFD_ENTRIES {
+        log::warn!("TIFF: Reached maximum IFD entry limit ({}). Stopping parse to prevent infinite loops.", MAX_IFD_ENTRIES);
+        break;
+      }
+
+      if let Err(e) = reader.goto(next_pos) {
+          log::warn!("Truncated IFD: Could not seek to next entry position. Stopping parse. Error: {}", e);
           break;
       }
       
       next_pos += 12;
-      
-      // Read the tag ID. If this fails (EOF), stop parsing.
+
       let tag = match reader.read_u16() {
           Ok(t) => t,
-          Err(_) => {
-              log::warn!("Truncated IFD: Could not read tag ID. Stopping parse.");
+          Err(e) => {
+              log::warn!("Truncated IFD: Could not read tag ID (Index {}). Stopping parse. Error: {}", i, e);
               break;
           }
       };
@@ -160,16 +164,13 @@ impl IFD {
           entries.insert(entry.tag, entry);
         }
         Err(err) => {
-          // Handle EOF specifically to stop on corrupt/truncated IFDs
-          match err {
-              TiffError::Io(ref io_err) if io_err.kind() == std::io::ErrorKind::UnexpectedEof => {
-                  log::warn!("EOF reached while parsing IFD entry (tag 0x{:X}). The IFD entry count is likely incorrect. Stopping parse.", tag);
-                  break; // Stop the loop, do not try to read the next tag
-              }
-              _ => {
-                  // For other errors (invalid types, etc), just log debug/warn and continue
-                  log::debug!("Failed to parse TIFF tag 0x{:X}, skipping: {:?}", tag, err);
-              }
+          consecutive_errors += 1;
+          log::warn!("Failed to parse TIFF tag 0x{:X} (Index {}). Error: {:?}", tag, i, err);
+
+          // If we fail 5 times in a row, the IFD is likely garbage or physically truncated.
+          if consecutive_errors >= 5 {
+              log::warn!("Too many consecutive parsing errors ({}). Stopping parse to prevent flood.", consecutive_errors);
+              break;
           }
         }
       }

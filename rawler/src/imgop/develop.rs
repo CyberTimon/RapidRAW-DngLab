@@ -245,11 +245,7 @@ impl RawDevelop {
               wb = [1.0, 1.0, 1.0, 1.0];
             }
 
-<<<<<<< HEAD
-            log::debug!("wb: {:?}, coeff: {:?}", wb, xyz2cam);
-=======
             log::info!("Applying calibration with wb: {:?}, xyz2cam: {:?}", wb, xyz2cam);
->>>>>>> 6c459633 (improve robustness against corrupt files and missing metadata)
 
             intermediate = match intermediate {
               Intermediate::Monochrome(_) => intermediate,
