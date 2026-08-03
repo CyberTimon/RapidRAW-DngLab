@@ -333,6 +333,11 @@ pub trait Decoder: Send {
   /// a generalized set of metadata attributes.
   fn raw_metadata(&self, file: &RawSource, params: &RawDecodeParams) -> Result<RawMetadata>;
 
+  /// Returns the as-shot white-balance temperature in Kelvin, when available.
+  fn as_shot_temperature(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<Option<u32>> {
+    Ok(None)
+  }
+
   fn xpacket(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<Option<Vec<u8>>> {
     Ok(None)
   }

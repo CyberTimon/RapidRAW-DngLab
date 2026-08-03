@@ -92,6 +92,15 @@ impl<'a> Decoder for DngDecoder<'a> {
     Ok(mdata)
   }
 
+  fn as_shot_temperature(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<Option<u32>> {
+    let raw = self.get_raw_ifd()?;
+    let width = fetch_tiff_tag!(raw, TiffCommonTag::ImageWidth).force_usize(0);
+    let height = fetch_tiff_tag!(raw, TiffCommonTag::ImageLength).force_usize(0);
+    let cam = self.make_camera(raw, width, height)?;
+    let wb = self.get_wb(&cam)?;
+    Ok(estimate_as_shot_temperature(wb, &cam.color_matrix))
+  }
+
   fn thumbnail_image(&self, file: &RawSource, _params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
     if let Some(thumb_ifd) = Some(self.tiff.root_ifd()).filter(|ifd| ifd.get_entry(TiffCommonTag::NewSubFileType).map(|entry| entry.force_u16(0)) == Some(1)) {
       Ok(Some(dynamic_image_from_ifd(thumb_ifd, file)?))
