@@ -233,6 +233,11 @@ impl<'a> Decoder for ArwDecoder<'a> {
     Ok(mdata)
   }
 
+  fn as_shot_temperature(&self, file: &RawSource, _params: &RawDecodeParams) -> Result<Option<u32>> {
+    let wb = self.get_params(file)?.wb;
+    Ok(crate::imgop::xyz::estimate_as_shot_temperature(wb, &self.camera.color_matrix))
+  }
+
   fn format_hint(&self) -> FormatHint {
     FormatHint::ARW
   }
