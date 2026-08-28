@@ -239,6 +239,10 @@ pub struct RawImage {
   pub color_matrix: HashMap<Illuminant, FlatColorMatrix>,
 
   pub dng_tags: HashMap<u16, Value>,
+
+  /// For rotated Fuji sensors, the split point used to calculate the
+  /// inscribed rectangle after the final 45-degree rotation.
+  pub fuji_rotation_width: Option<usize>,
 }
 
 /// The actual image data, after decoding
@@ -389,6 +393,7 @@ impl RawImage {
       orientation: Orientation::Normal, //cam.orientation, // TODO fixme
       color_matrix: cam.color_matrix,
       dng_tags: HashMap::new(),
+      fuji_rotation_width: None,
     }
   }
 
@@ -478,6 +483,7 @@ impl RawImage {
       orientation: Orientation::Normal, //cam.orientation, // TODO fixme
       color_matrix: cam.color_matrix,
       dng_tags: HashMap::new(),
+      fuji_rotation_width: None,
     }
   }
 
