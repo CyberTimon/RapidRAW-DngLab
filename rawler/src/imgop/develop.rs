@@ -268,7 +268,12 @@ impl RawDevelop {
             crop = intersection.adapt(&active_area);
           }
         }
-        let original_width = rawimage.active_area.map(|area| area.d.w).unwrap_or(rawimage.dim().w);
+	let demosaic_changed_resolution = self.steps.contains(&ProcessingStep::Demosaic);
+        let original_width = if demosaic_changed_resolution {
+	 rawimage.active_area.map(|area| area.d.w).unwrap_or(rawimage.dim().w)
+	} else {
+	 rawimage.dim().w
+	};
         if original_width > 0 {
             let scale_factor = intermediate.dim().w as f32 / original_width as f32;
             if (scale_factor - 1.0).abs() > 1e-6 {
