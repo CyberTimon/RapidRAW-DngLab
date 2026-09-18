@@ -61,6 +61,7 @@ struct Cr3Metadata {
   exif: Option<GenericTiffReader>,
   makernotes: Option<GenericTiffReader>,
   wb: Option<[f32; 4]>,
+  as_shot_temperature: Option<u32>,
   blacklevels: Option<[u16; 4]>,
   whitelevel: Option<u16>,
 }
@@ -235,6 +236,12 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     }
 
     Ok(mdata)
+  }
+
+  fn as_shot_temperature(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<u32>> {
+    let metadata = self.read_cr3_metadata(file, params)?;
+    let estimated = || crate::imgop::xyz::estimate_as_shot_temperature(metadata.wb?, &self.camera.color_matrix);
+    Ok(metadata.as_shot_temperature.or_else(estimated))
   }
 
   fn xpacket(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<Vec<u8>>> {
@@ -523,6 +530,7 @@ impl<'a> Cr3Decoder<'a> {
           let colordata = cr2::parse_colordata(colordata)?;
           //rec8.root_ifd().dump::<TiffCommonTag>(10).iter().for_each(|line| eprintln!("MKD: {}", line));
           md.wb = Some(normalize_wb(colordata.wb));
+          md.as_shot_temperature = colordata.as_shot_temperature.map(u32::from);
           md.blacklevels = colordata.blacklevel;
           md.whitelevel = colordata.specular_whitelevel;
           /*

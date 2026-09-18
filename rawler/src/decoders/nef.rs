@@ -328,6 +328,11 @@ impl<'a> Decoder for NefDecoder<'a> {
     })
   }
 
+  fn as_shot_temperature(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<Option<u32>> {
+    let wb = normalize_wb(self.get_wb()?);
+    Ok(crate::imgop::xyz::estimate_as_shot_temperature(wb, &self.camera.color_matrix))
+  }
+
   fn full_image(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
     if params.image_index != 0 {
       return Ok(None);

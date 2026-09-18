@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: LGPL-2.1
 // Copyright 2021 Daniel Vogelbacher <daniel@chaospixel.com>
 
-use std::convert::TryFrom;
+use std::{collections::HashMap, convert::TryFrom};
+
+use crate::imgop::matrix::{multiply_row1, pseudo_inverse, transform_1d};
 
 /// Illuminants for XYZ
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -29,6 +31,42 @@ pub enum Illuminant {
 }
 
 pub type FlatColorMatrix = Vec<f32>;
+
+// Robertson (1968) reciprocal-temperature lines in CIE 1960 UCS space.
+// Data from Wyszecki & Stiles, Color Science, 2nd ed., p. 228.
+const ROBERTSON_LINES: [(f32, f32, f32, f32); 31] = [
+  (0.0, 0.18006, 0.26352, -0.24341),
+  (10.0, 0.18066, 0.26589, -0.25479),
+  (20.0, 0.18133, 0.26846, -0.26876),
+  (30.0, 0.18208, 0.27119, -0.28539),
+  (40.0, 0.18293, 0.27407, -0.30470),
+  (50.0, 0.18388, 0.27709, -0.32675),
+  (60.0, 0.18494, 0.28021, -0.35156),
+  (70.0, 0.18611, 0.28342, -0.37915),
+  (80.0, 0.18740, 0.28668, -0.40955),
+  (90.0, 0.18880, 0.28997, -0.44278),
+  (100.0, 0.19032, 0.29326, -0.47888),
+  (125.0, 0.19462, 0.30141, -0.58204),
+  (150.0, 0.19962, 0.30921, -0.70471),
+  (175.0, 0.20525, 0.31647, -0.84901),
+  (200.0, 0.21142, 0.32312, -1.0182),
+  (225.0, 0.21807, 0.32909, -1.2168),
+  (250.0, 0.22511, 0.33439, -1.4512),
+  (275.0, 0.23247, 0.33904, -1.7298),
+  (300.0, 0.24010, 0.34308, -2.0637),
+  (325.0, 0.24702, 0.34655, -2.4681),
+  (350.0, 0.25591, 0.34951, -2.9641),
+  (375.0, 0.26400, 0.35200, -3.5814),
+  (400.0, 0.27218, 0.35407, -4.3633),
+  (425.0, 0.28039, 0.35577, -5.3762),
+  (450.0, 0.28863, 0.35714, -6.7262),
+  (475.0, 0.29685, 0.35823, -8.5955),
+  (500.0, 0.30505, 0.35907, -11.324),
+  (525.0, 0.31320, 0.35968, -15.628),
+  (550.0, 0.32129, 0.36011, -23.325),
+  (575.0, 0.32931, 0.36038, -40.770),
+  (600.0, 0.33724, 0.36051, -116.45),
+];
 
 impl TryFrom<u16> for Illuminant {
   type Error = String;
@@ -94,6 +132,97 @@ impl Illuminant {
       _ => Err(format!("Unknown illuminant name: '{}'", s)),
     }
   }
+
+  fn temperature(self) -> Option<f32> {
+    match self {
+      Self::A | Self::Tungsten => Some(2850.0),
+      Self::IsoStudioTungsten => Some(3200.0),
+      Self::D50 => Some(5000.0),
+      Self::D55 | Self::Daylight | Self::FineWeather | Self::Flash | Self::B => Some(5500.0),
+      Self::D65 | Self::C | Self::CloudyWeather => Some(6500.0),
+      Self::D75 | Self::Shade => Some(7500.0),
+      Self::DaylightFluorescent => Some(6400.0),
+      Self::DaylightWhiteFluorescent => Some(5050.0),
+      Self::Fluorescent | Self::CoolWhiteFluorescent => Some(4150.0),
+      Self::WhiteFluorescent => Some(3525.0),
+      Self::Unknown => None,
+    }
+  }
+}
+
+/// Estimate correlated color temperature from a CIE 1931 xy chromaticity.
+fn xy_to_temperature(x: f32, y: f32) -> Option<f32> {
+  let denominator = 1.5 - x + 6.0 * y;
+  if !denominator.is_finite() || denominator <= 0.0 {
+    return None;
+  }
+
+  let u = 2.0 * x / denominator;
+  let v = 3.0 * y / denominator;
+  let mut previous: Option<(f32, f32)> = None;
+
+  for &(reciprocal_temperature, line_u, line_v, slope) in &ROBERTSON_LINES {
+    let distance = (v - line_v - slope * (u - line_u)) / (1.0 + slope * slope).sqrt();
+    if let Some((previous_reciprocal_temperature, previous_distance)) = previous
+      && distance <= 0.0
+    {
+      let fraction = previous_distance / (previous_distance - distance);
+      let reciprocal_temperature = previous_reciprocal_temperature + fraction * (reciprocal_temperature - previous_reciprocal_temperature);
+      return (reciprocal_temperature > 0.0).then_some(1_000_000.0 / reciprocal_temperature);
+    }
+    previous = Some((reciprocal_temperature, distance));
+  }
+
+  None
+}
+
+/// Estimate the camera's as-shot color temperature from its white-balance
+/// coefficients and color matrices. This follows the iterative approach used
+/// by the DNG SDK: interpolate the color matrix in reciprocal-temperature
+/// space, convert the camera neutral to xy, then update the temperature.
+pub fn estimate_as_shot_temperature(wb: [f32; 4], color_matrices: &HashMap<Illuminant, FlatColorMatrix>) -> Option<u32> {
+  if wb[..3].iter().any(|value| !value.is_finite() || *value <= 0.0) {
+    return None;
+  }
+
+  let neutral = [1.0 / wb[0], 1.0 / wb[1], 1.0 / wb[2]];
+  let mut matrices: Vec<(f32, [[f32; 3]; 3])> = color_matrices
+    .iter()
+    .filter_map(|(illuminant, matrix)| Some((illuminant.temperature()?, transform_1d::<3, 3>(matrix)?)))
+    .collect();
+  matrices.sort_by(|left, right| left.0.total_cmp(&right.0));
+  let &(low_temperature, low_matrix) = matrices.first()?;
+  let &(high_temperature, high_matrix) = matrices.last()?;
+
+  let mut temperature = 5000.0_f32.clamp(low_temperature, high_temperature);
+  for _ in 0..30 {
+    let weight = if (high_temperature - low_temperature).abs() < f32::EPSILON {
+      1.0
+    } else if temperature <= low_temperature {
+      1.0
+    } else if temperature >= high_temperature {
+      0.0
+    } else {
+      ((1.0 / temperature) - (1.0 / high_temperature)) / ((1.0 / low_temperature) - (1.0 / high_temperature))
+    };
+
+    let matrix = std::array::from_fn(|row| std::array::from_fn(|column| weight * low_matrix[row][column] + (1.0 - weight) * high_matrix[row][column]));
+    let xyz = multiply_row1(&pseudo_inverse(matrix), &neutral);
+    let sum = xyz.iter().sum::<f32>();
+    if !sum.is_finite() || sum <= 0.0 {
+      return None;
+    }
+    let next_temperature = xy_to_temperature(xyz[0] / sum, xyz[1] / sum)?;
+    if !next_temperature.is_finite() || !(1500.0..=50_000.0).contains(&next_temperature) {
+      return None;
+    }
+    if (next_temperature - temperature).abs() < 0.1 {
+      return Some(next_temperature.round() as u32);
+    }
+    temperature = next_temperature;
+  }
+
+  Some(temperature.round() as u32)
 }
 
 // Constant matrix for converting sRGB to XYZ(D65):
@@ -210,4 +339,56 @@ pub fn xy_whitepoint_to_wb_coeff(x: f32, y: f32, colormatrix: &[[f32; 3]; 3]) ->
     }
   }
   result
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+  use crate::imgop::matrix::transform_2d;
+
+  #[test]
+  fn estimates_d65_temperature_from_camera_neutral() {
+    let matrix = [[0.8, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.1, 0.7]];
+    let matrices = HashMap::from([(Illuminant::D65, transform_2d(&matrix))]);
+    let wb = xy_whitepoint_to_wb_coeff(CIE_1931_WHITE_POINT_D65.0, CIE_1931_WHITE_POINT_D65.1, &matrix);
+    let wb = [wb[0], wb[1], wb[2], f32::NAN];
+
+    let temperature = estimate_as_shot_temperature(wb, &matrices).unwrap();
+    assert!((6400..=6600).contains(&temperature));
+  }
+
+  #[test]
+  fn interpolates_dual_illuminant_matrices_in_mired_space() {
+    let matrix_a = [[0.7, 0.2, 0.0], [0.1, 0.8, 0.1], [0.0, 0.1, 0.8]];
+    let matrix_d65 = [[0.8, 0.1, 0.0], [0.05, 0.9, 0.05], [0.0, 0.1, 0.7]];
+    let target_temperature = 5000.0;
+    let weight = ((1.0 / target_temperature) - (1.0 / 6500.0)) / ((1.0 / 2850.0) - (1.0 / 6500.0));
+    let interpolated = std::array::from_fn(|row| std::array::from_fn(|column| weight * matrix_a[row][column] + (1.0 - weight) * matrix_d65[row][column]));
+    let matrices = HashMap::from([(Illuminant::A, transform_2d(&matrix_a)), (Illuminant::D65, transform_2d(&matrix_d65))]);
+    let wb = xy_whitepoint_to_wb_coeff(CIE_1931_WHITE_POINT_D50.0, CIE_1931_WHITE_POINT_D50.1, &interpolated);
+    let wb = [wb[0], wb[1], wb[2], f32::NAN];
+
+    let temperature = estimate_as_shot_temperature(wb, &matrices).unwrap();
+    assert!((4950..=5050).contains(&temperature));
+  }
+
+  #[test]
+  fn estimates_nikon_zf_as_shot_temperature() {
+    // Nikon Z f sample with WB_RBLevels 1.4453125/1.689453125 and
+    // ColorTemperatureAuto 3890 K.
+    let matrices = HashMap::from([
+      (Illuminant::A, vec![1.3904, -0.7947, 0.0654, -0.432, 1.2105, 0.2497, -0.0235, 0.083, 0.9243]),
+      (Illuminant::D65, vec![1.1607, -0.4491, -0.0977, -0.4522, 1.246, 0.2304, -0.0458, 0.1519, 0.7616]),
+    ]);
+    let wb = [1.4453125, 1.0, 1.689453125, f32::NAN];
+
+    let temperature = estimate_as_shot_temperature(wb, &matrices).unwrap();
+    assert!((3800..=4000).contains(&temperature));
+  }
+
+  #[test]
+  fn rejects_invalid_white_balance_coefficients() {
+    let matrices = HashMap::from([(Illuminant::D65, vec![1.0; 9])]);
+    assert_eq!(estimate_as_shot_temperature([f32::NAN, 1.0, 1.0, f32::NAN], &matrices), None);
+  }
 }
