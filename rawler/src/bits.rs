@@ -248,7 +248,11 @@ impl LookupTable {
     let delta = sdelta as u32;
     let pixel = base + ((delta * (*rand & 2047) + 1024) >> 12);
     *rand = 15700 * (*rand & 65535) + (*rand >> 16);
-    pixel as u16
+    // Saturate instead of wrapping: at a table's last entry (e.g. 65535 with a
+    // step of 128 below it) base + dither reaches 65567, and `as u16` alone
+    // turned about half of all fully clipped pixels into 0..31 (near black).
+    // rawspeed's doLookup() clamps to 16 bits at the same point.
+    pixel.min(u16::MAX as u32) as u16
   }
 }
 
