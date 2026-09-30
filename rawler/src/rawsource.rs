@@ -21,7 +21,13 @@ pub struct RawSource {
 enum RawSourceImpl {
   Memmap(memmap2::Mmap),
   Memory(Arc<Vec<u8>>),
+  Borrowed(*const u8, usize),
 }
+
+// SAFETY: `Borrowed` points to immutable bytes that the creator of the source
+// guarantees to outlive it (see `new_from_slice_unchecked`).
+unsafe impl Send for RawSourceImpl {}
+unsafe impl Sync for RawSourceImpl {}
 
 impl RawSource {
   pub fn new(path: &Path) -> std::io::Result<Self> {
@@ -54,6 +60,16 @@ impl RawSource {
 
   pub fn new_from_slice(buf: &[u8]) -> Self {
     Self::new_from_shared_vec(Arc::new(Vec::from(buf)))
+  }
+
+  /// # Safety
+  /// `buf` must stay valid and unmodified for the whole lifetime of the returned
+  /// `RawSource` (drop the source before the buffer).
+  pub unsafe fn new_from_slice_unchecked(buf: &[u8]) -> Self {
+    Self {
+      path: PathBuf::default(),
+      inner: RawSourceImpl::Borrowed(buf.as_ptr(), buf.len()),
+    }
   }
 
   /// Calculate digest for file
@@ -135,6 +151,8 @@ impl Deref for RawSource {
     match &self.inner {
       RawSourceImpl::Memmap(mmap) => mmap.deref(),
       RawSourceImpl::Memory(mem) => mem.deref(),
+      // SAFETY: guaranteed valid by the caller of `new_from_slice_unchecked`.
+      RawSourceImpl::Borrowed(ptr, len) => unsafe { std::slice::from_raw_parts(*ptr, *len) },
     }
   }
 }

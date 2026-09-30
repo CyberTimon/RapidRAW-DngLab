@@ -164,6 +164,8 @@ pub type ReadableBoxed = Box<dyn Readable>;
 #[derive(Default, Clone, Debug, Hash, Eq, PartialEq)]
 pub struct RawDecodeParams {
   pub image_index: usize,
+  /// DNG only: decode the smallest LinearRaw proxy IFD with at least this many pixels on its larger side.
+  pub proxy_min_dim: Option<usize>,
 }
 
 #[derive(Default, Debug, Clone)]

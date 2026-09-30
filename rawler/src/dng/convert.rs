@@ -104,7 +104,10 @@ where
   W: Write + Seek + Send,
 {
   let decoder = crate::get_decoder(rawfile)?;
-  let raw_params = RawDecodeParams { image_index: params.index };
+  let raw_params = RawDecodeParams {
+    image_index: params.index,
+    ..Default::default()
+  };
   let mut rawimage = decoder.raw_image(rawfile, &raw_params, false)?;
   let metadata = decoder.raw_metadata(rawfile, &raw_params)?;
 

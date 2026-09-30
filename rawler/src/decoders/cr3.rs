@@ -395,6 +395,13 @@ impl<'a> Decoder for Cr3Decoder<'a> {
     Ok(img)
   }
 
+  fn preview_image(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
+    if params.image_index != 0 || rawler_ignore_previews() {
+      return Ok(None);
+    }
+    Ok(find_prvw_jpeg(file.buf()).and_then(|jpeg| image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok()))
+  }
+
   /// Extract preview image embedded in CR3
   fn full_image(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
     if params.image_index != 0 {
@@ -793,4 +800,129 @@ pub enum Cr3MakernoteTag {
   HDRInfo = 0x4025,
   AFConfig = 0x4028,
   RawBurstModeRoll = 0x403f,
+}
+
+fn find_prvw_jpeg(buf: &[u8]) -> Option<&[u8]> {
+  const PREVIEW_UUID: [u8; 16] = [
+    0xea, 0xf4, 0x2b, 0x5e, 0x1c, 0x98, 0x4b, 0x88, 0xb9, 0xfb, 0xb7, 0xdc, 0x40, 0x6e, 0x4d, 0x16,
+  ];
+  let be32 = |o: usize| buf.get(o..o + 4).map(|b| u32::from_be_bytes(b.try_into().unwrap()) as usize);
+  let be16 = |o: usize| buf.get(o..o + 2).map(|b| u16::from_be_bytes(b.try_into().unwrap()) as usize);
+
+  let mut offset = 0;
+  while offset < buf.len()
+    && let (Some(size), Some(typ)) = (be32(offset), buf.get(offset + 4..offset + 8))
+  {
+    let size = if size == 1 {
+      match buf.get(offset + 8..offset + 16) {
+        Some(b) => u64::from_be_bytes(b.try_into().unwrap()) as usize,
+        None => break,
+      }
+    } else {
+      size
+    };
+    if size < 8 || typ == b"mdat" {
+      break;
+    }
+    if typ == b"uuid" && buf.get(offset + 8..offset + 24) == Some(&PREVIEW_UUID[..]) {
+      // uuid(16) + 8 unknown bytes, then the PRVW box:
+      // size(4) 'PRVW' unknown(4) unknown(2) width(2) height(2) unknown(2) jpeg_size(4) jpeg
+      let prvw = offset + 32;
+      if buf.get(prvw + 4..prvw + 8) != Some(&b"PRVW"[..]) {
+        break;
+      }
+      let (Some(width), Some(height), Some(len)) = (be16(prvw + 14), be16(prvw + 16), be32(prvw + 20)) else {
+        break;
+      };
+      debug!("CR3 PRVW preview: {}x{}, {} bytes", width, height, len);
+      let Some(jpeg) = buf.get(prvw + 24..prvw + 24 + len) else {
+        break;
+      };
+      return Some(jpeg);
+    }
+    let Some(next) = offset.checked_add(size) else {
+      break;
+    };
+    offset = next;
+  }
+  None
+}
+
+#[cfg(test)]
+mod prvw_tests {
+  use super::find_prvw_jpeg;
+
+  const UUID: [u8; 16] = [0xea, 0xf4, 0x2b, 0x5e, 0x1c, 0x98, 0x4b, 0x88, 0xb9, 0xfb, 0xb7, 0xdc, 0x40, 0x6e, 0x4d, 0x16];
+
+  fn boxed(typ: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+    let mut v = ((payload.len() + 8) as u32).to_be_bytes().to_vec();
+    v.extend_from_slice(typ);
+    v.extend_from_slice(payload);
+    v
+  }
+
+  fn preview_uuid(jpeg: &[u8], declared_len: u32) -> Vec<u8> {
+    let mut prvw = vec![0u8; 4]; // unknown
+    prvw.extend_from_slice(&1u16.to_be_bytes());
+    prvw.extend_from_slice(&1620u16.to_be_bytes());
+    prvw.extend_from_slice(&1080u16.to_be_bytes());
+    prvw.extend_from_slice(&1u16.to_be_bytes());
+    prvw.extend_from_slice(&declared_len.to_be_bytes());
+    prvw.extend_from_slice(jpeg);
+    let mut payload = UUID.to_vec();
+    payload.extend_from_slice(&[0u8; 8]);
+    payload.extend_from_slice(&boxed(b"PRVW", &prvw));
+    boxed(b"uuid", &payload)
+  }
+
+  const JPEG: &[u8] = &[0xff, 0xd8, 1, 2, 3, 0xff, 0xd9];
+
+  fn file(parts: &[Vec<u8>]) -> Vec<u8> {
+    parts.concat()
+  }
+
+  #[test]
+  fn finds_preview_after_other_boxes() {
+    let f = file(&[boxed(b"ftyp", b"crx "), boxed(b"moov", &[0; 40]), boxed(b"uuid", &[0; 30]), preview_uuid(JPEG, 7), boxed(b"mdat", &[0; 16])]);
+    assert_eq!(find_prvw_jpeg(&f), Some(JPEG));
+  }
+
+  #[test]
+  fn handles_64bit_largesize_boxes() {
+    let mut large = 1u32.to_be_bytes().to_vec();
+    large.extend_from_slice(b"free");
+    large.extend_from_slice(&24u64.to_be_bytes());
+    large.extend_from_slice(&[0; 8]);
+    let f = file(&[boxed(b"ftyp", b"crx "), large, preview_uuid(JPEG, 7)]);
+    assert_eq!(find_prvw_jpeg(&f), Some(JPEG));
+  }
+
+  #[test]
+  fn stops_at_mdat() {
+    let f = file(&[boxed(b"ftyp", b"crx "), boxed(b"mdat", &[0; 16]), preview_uuid(JPEG, 7)]);
+    assert_eq!(find_prvw_jpeg(&f), None);
+  }
+
+  #[test]
+  fn rejects_malformed_input() {
+    let mut huge_large = 1u32.to_be_bytes().to_vec();
+    huge_large.extend_from_slice(b"free");
+    huge_large.extend_from_slice(&u64::MAX.to_be_bytes());
+    let mut not_prvw = preview_uuid(JPEG, 7);
+    not_prvw[36..40].copy_from_slice(b"XXXX");
+    let cases = vec![
+      vec![],
+      vec![0, 0, 0],
+      boxed(b"ftyp", b""),                                       // just a header
+      file(&[vec![0, 0, 0, 0], b"ftyp".to_vec()]),               // size 0 (to EOF)
+      file(&[vec![0, 0, 0, 4], b"ftyp".to_vec(), preview_uuid(JPEG, 7)]), // size < 8
+      file(&[huge_large, preview_uuid(JPEG, 7)]),               // largesize overflow
+      file(&[boxed(b"ftyp", b"crx "), preview_uuid(JPEG, 1_000_000)]), // jpeg length past EOF
+      file(&[boxed(b"ftyp", b"crx "), not_prvw]),                // uuid without PRVW
+      file(&[boxed(b"ftyp", b"crx "), preview_uuid(JPEG, 7)[..40].to_vec()]), // truncated PRVW header
+    ];
+    for (i, case) in cases.iter().enumerate() {
+      assert_eq!(find_prvw_jpeg(case), None, "case {}", i);
+    }
+  }
 }
