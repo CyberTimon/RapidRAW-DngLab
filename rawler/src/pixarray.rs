@@ -402,6 +402,17 @@ where
     Self::new_with(output, area.d.w, area.d.h)
   }
 
+  pub fn rotate_90cw(&self) -> Self {
+    let mut out = Self::new(self.height, self.width);
+    let out_width = out.width;
+    out.pixels_mut().chunks_exact_mut(out_width).enumerate().for_each(|(row, line)| {
+      line.iter_mut().enumerate().for_each(|(col, pixel)| {
+        *pixel = *self.at(self.height - 1 - col, row);
+      });
+    });
+    out
+  }
+
   pub fn make_padded(&self, padding: usize) -> Self {
     let new_w = self.width + padding * 2;
     let new_h = self.height + padding * 2;
