@@ -494,9 +494,9 @@ pub fn deinterleave2x2(input: &PixU16) -> crate::Result<PixU16> {
 #[macro_export]
 macro_rules! alloc_image_plain {
   ($width:expr, $height:expr, $dummy: expr) => {{
-    if $width * $height > 500000000 || $width > 50000 || $height > 50000 {
-      panic!("rawler: surely there's no such thing as a >500MP or >50000 px wide/tall image!");
-    }
+    // if $width * $height > 500000000 || $width > 50000 || $height > 50000 {
+    //   panic!("rawler: surely there's no such thing as a >500MP or >50000 px wide/tall image!");
+    // }
     if $dummy {
       $crate::pixarray::PixU16::new_uninit($width, $height)
     } else {
@@ -530,9 +530,9 @@ macro_rules! alloc_image_ok {
 #[macro_export]
 macro_rules! alloc_image_f32_plain {
   ($width:expr, $height:expr, $dummy: expr) => {{
-    if $width * $height > 500000000 || $width > 50000 || $height > 50000 {
-      panic!("rawler: surely there's no such thing as a >500MP or >50000 px wide/tall image!");
-    }
+    // if $width * $height > 500000000 || $width > 50000 || $height > 50000 {
+    //   panic!("rawler: surely there's no such thing as a >500MP or >50000 px wide/tall image!");
+    // }
     if $dummy {
       $crate::pixarray::PixF32::new_uninit($width, $height)
     } else {
