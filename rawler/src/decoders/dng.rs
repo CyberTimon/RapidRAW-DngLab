@@ -84,7 +84,11 @@ impl<'a> Decoder for DngDecoder<'a> {
       _ => todo!(),
     };
 
-    let raw_data = plain_image_from_ifd(raw, file)?;
+    let raw_data = if dummy {
+      RawImageData::Integer(Vec::new())
+    } else {
+      plain_image_from_ifd(raw, file)?
+    };
     let wb_coeffs = self.get_wb(&cam)?;
     let mut image = RawImage::new_with_data(cam, raw_data, width * cpp, height, cpp, wb_coeffs, photometric, blacklevel, whitelevel, dummy);
     image.orientation = orientation;
