@@ -21,65 +21,69 @@ pub fn decode_ljpeg(ljpeg: &LjpegDecompressor, out: &mut [u16], x: usize, stripw
   let htable = |index: usize| -> &HuffTable { &ljpeg.dhts[ljpeg.sof.components[index].dc_tbl_num] };
   let mut pump = BitPumpJPEG::new(ljpeg.buffer);
   let base_prediction = 1 << (ljpeg.sof.precision - ljpeg.point_transform - 1);
-  let total_mcus = ljpeg
-    .sof
-    .width
-    .checked_mul(height)
-    .ok_or_else(|| format!("ljpeg: MCU count overflow for {}x{height}", ljpeg.sof.width))?;
+  // validate_restart_support ensures that a restart interval spans whole rows.
+  let restart_rows = if ljpeg.restart_interval == 0 {
+    0
+  } else {
+    ljpeg.restart_interval / ljpeg.sof.width
+  };
   let mut next_restart_marker = 0;
 
   // initialize first pixel components
   for c in 0..ncomp {
     out[x + c] = (base_prediction + htable(c).huff_decode(&mut pump)?) as u16;
   }
-  let mut decoded_mcus = 1;
-  let mut reset_prediction = consume_restart_if_needed(ljpeg, &mut pump, decoded_mcus, total_mcus, &mut next_restart_marker)?;
-
   let skip_x = ljpeg.sof.width - width / ncomp;
 
   for row in 0..height {
+    let first_interval_row = row == 0 || (restart_rows != 0 && row.is_multiple_of(restart_rows));
+    if row != 0 && first_interval_row {
+      pump.consume_restart_marker(next_restart_marker)?;
+      next_restart_marker = (next_restart_marker + 1) % 8;
+    }
     let startcol = if row == 0 { x + ncomp } else { x }; // skip first pixel in first row
     for col in (startcol..(width + x)).step_by(ncomp) {
       for c in 0..ncomp {
-        let p: i32 = if reset_prediction {
+        let p: i32 = if first_interval_row && col == x {
           base_prediction
         } else if col == x {
           // At start of line predictor starts with start of previous line
           out[(row - 1) * stripwidth + x + c] as i32
         } else {
-          // All other cases use the two previous pixels in the same line
-          match (row, ljpeg.predictor) {
-            (row @ 0, _) | (row, 1) => {
+          // Each restart interval begins like a new image: its entire first
+          // row uses the left neighbour, regardless of the selected predictor.
+          match (first_interval_row, ljpeg.predictor) {
+            (true, _) | (_, 1) => {
               let a = out[row * stripwidth + (col - ncomp) + c] as i32;
               a
             }
-            (row, 2) => {
+            (_, 2) => {
               let b = out[(row - 1) * stripwidth + col + c] as i32;
               b
             }
-            (row, 3) => {
+            (_, 3) => {
               let c = out[(row - 1) * stripwidth + (col - ncomp) + c] as i32;
               c
             }
-            (row, 4) => {
+            (_, 4) => {
               let a = out[row * stripwidth + (col - ncomp) + c] as i32;
               let b = out[(row - 1) * stripwidth + col + c] as i32;
               let c = out[(row - 1) * stripwidth + (col - ncomp) + c] as i32;
               a + b - c
             }
-            (row, 5) => {
+            (_, 5) => {
               let a = out[row * stripwidth + (col - ncomp) + c] as i32;
               let b = out[(row - 1) * stripwidth + col + c] as i32;
               let c = out[(row - 1) * stripwidth + (col - ncomp) + c] as i32;
               a + ((b - c) >> 1)
             }
-            (row, 6) => {
+            (_, 6) => {
               let a = out[row * stripwidth + (col - ncomp) + c] as i32;
               let b = out[(row - 1) * stripwidth + col + c] as i32;
               let c = out[(row - 1) * stripwidth + (col - ncomp) + c] as i32;
               b + ((a - c) >> 1)
             }
-            (row, 7) => {
+            (_, 7) => {
               let a = out[row * stripwidth + (col - ncomp) + c] as i32;
               let b = out[(row - 1) * stripwidth + col + c] as i32;
               (a + b) >> 1 // Adobe DNG SDK uses int32 and shifts, so we will do, too.
@@ -93,37 +97,28 @@ pub fn decode_ljpeg(ljpeg: &LjpegDecompressor, out: &mut [u16], x: usize, stripw
         let diff = htable(c).huff_decode(&mut pump)?;
         out[row * stripwidth + col + c] = (p + diff) as u16;
       }
-      decoded_mcus += 1;
-      reset_prediction = consume_restart_if_needed(ljpeg, &mut pump, decoded_mcus, total_mcus, &mut next_restart_marker)?;
     }
     for _ in 0..skip_x {
-      // This MCU is outside the requested output width, but it still counts
-      // towards the restart interval and its entropy data must be consumed.
+      // Consume the complete encoded row even when the output is narrower.
+      // Its restart marker is handled at the start of the next decoded row.
       for c in 0..ncomp {
         // Skip extra encoded differences if the ljpeg frame is wider than the output
         htable(c).huff_decode(&mut pump)?;
       }
-      decoded_mcus += 1;
-      reset_prediction = consume_restart_if_needed(ljpeg, &mut pump, decoded_mcus, total_mcus, &mut next_restart_marker)?;
     }
   }
 
-  if height == ljpeg.sof.height { pump.validate_end_of_scan() } else { Ok(()) }
+  if height == ljpeg.sof.height {
+    warn_on_scan_end(&pump);
+  }
+  Ok(())
 }
 
-fn consume_restart_if_needed(
-  ljpeg: &LjpegDecompressor,
-  pump: &mut BitPumpJPEG<'_>,
-  decoded_mcus: usize,
-  total_mcus: usize,
-  next_restart_marker: &mut u8,
-) -> Result<bool, String> {
-  if ljpeg.restart_interval != 0 && decoded_mcus % ljpeg.restart_interval == 0 && decoded_mcus < total_mcus {
-    pump.consume_restart_marker(*next_restart_marker)?;
-    *next_restart_marker = (*next_restart_marker + 1) % 8;
-    Ok(true)
-  } else {
-    Ok(false)
+fn warn_on_scan_end(pump: &BitPumpJPEG<'_>) {
+  // Keep the existing best-effort recovery of damaged or unusually padded
+  // camera streams. Only restart boundaries must be valid to resume decoding.
+  if let Err(error) = pump.validate_end_of_scan() {
+    log::warn!("ljpeg: {error}; keeping decoded pixels");
   }
 }
 
@@ -223,6 +218,7 @@ pub fn decode_sony_ljpeg_420(ljpeg: &LjpegDecompressor, out: &mut [u16], width: 
     }
   }
 
+  warn_on_scan_end(&pump);
   Ok(())
 }
 
@@ -277,6 +273,7 @@ pub fn decode_ljpeg_420(ljpeg: &LjpegDecompressor, out: &mut [u16], width: usize
     }
   }
 
+  warn_on_scan_end(&pump);
   Ok(())
 }
 
@@ -340,6 +337,7 @@ pub fn decode_ljpeg_422(ljpeg: &LjpegDecompressor, out: &mut [u16], width: usize
     }
   }
 
+  warn_on_scan_end(&pump);
   Ok(())
 }
 

@@ -150,28 +150,24 @@ impl<'a> BitPumpJPEG<'a> {
     }
   }
 
-  fn validate_entropy_padding(&self, context: &str) -> Result<(), String> {
+  /// Diagnose the end of a scan. Callers can warn without discarding decoded pixels.
+  pub fn validate_end_of_scan(&self) -> Result<(), String> {
     if self.consumed_zero_fill {
-      return Err(format!("Truncated JPEG entropy data {context}"));
+      return Err("Truncated JPEG entropy data at end of scan".to_string());
     }
 
-    let padding_bits = self.nbits.saturating_sub(self.zero_fill_bits);
-    if padding_bits > 7 {
-      return Err(format!("Unexpected trailing JPEG entropy data {context}"));
+    let real_bits = self.nbits.saturating_sub(self.zero_fill_bits);
+    if real_bits > 7 {
+      return Err("Unexpected trailing JPEG entropy data at end of scan".to_string());
     }
-    if padding_bits != 0 {
-      let padding = (self.bits >> self.zero_fill_bits) & ((1_u64 << padding_bits) - 1);
-      if padding != (1_u64 << padding_bits) - 1 {
-        return Err(format!("Invalid JPEG entropy padding {context}"));
+    if real_bits != 0 {
+      let padding = (self.bits >> self.zero_fill_bits) & ((1_u64 << real_bits) - 1);
+      let one_padding = (1_u64 << real_bits) - 1;
+      // Older rawler versions emitted zero padding.
+      if padding != one_padding && padding != 0 {
+        return Err("Invalid JPEG entropy padding at end of scan".to_string());
       }
     }
-
-    Ok(())
-  }
-
-  /// Validate the padding after the final decoded MCU in the scan.
-  pub fn validate_end_of_scan(&self) -> Result<(), String> {
-    self.validate_entropy_padding("at end of scan")?;
 
     if self.pos == self.buffer.len() {
       return Ok(());
@@ -204,7 +200,11 @@ impl<'a> BitPumpJPEG<'a> {
     if self.pos >= self.buffer.len() || self.buffer[self.pos] != 0xff {
       return Err(format!("Expected JPEG restart marker RST{expected} at byte {}", self.pos));
     }
-    self.validate_entropy_padding(&format!("before RST{expected}"))?;
+    if self.consumed_zero_fill {
+      return Err(format!("Truncated JPEG entropy data before RST{expected}"));
+    }
+    // Discard buffered padding regardless of its bit pattern, as reference
+    // decoders do. Consuming synthetic bits is still a truncated interval.
 
     // JPEG permits extra 0xff fill bytes before a marker.
     while self.pos < self.buffer.len() && self.buffer[self.pos] == 0xff {
