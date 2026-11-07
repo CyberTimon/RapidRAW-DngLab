@@ -385,14 +385,25 @@ impl<'a> OrfDecoder<'a> {
     out
   }
 
+  /// Return the ImageProcessing sub-IFD if it contains `tag`.
+  ///
+  /// Tag numbers are only unique within one IFD: the CameraSettings IFD reuses
+  /// 0x0100 (PreviewImageValid) and 0x0600 (DriveMode), so never search all
+  /// makernote sub-IFDs for ImageProcessing tags.
+  fn image_processing_ifd(&self, tag: OrfImageProcessing) -> Option<&IFD> {
+    self
+      .makernote
+      .get_sub_ifd(OrfMakernotes::ImageProcessingIFD)
+      .filter(|ifd| ifd.has_entry(tag))
+  }
+
   fn get_blacklevel(&self, bps: usize) -> Result<Option<BlackLevel>> {
-    let ifd = self.makernote.find_ifds_with_tag(OrfImageProcessing::OrfBlackLevels);
-    if ifd.is_empty() {
+    let Some(ifd) = self.image_processing_ifd(OrfImageProcessing::OrfBlackLevels) else {
       log::info!("ORF: Couldn't find ImgProc IFD, unable to read blacklevel");
       return Ok(None);
-    }
+    };
 
-    let blacks = fetch_tiff_tag!(ifd[0], OrfImageProcessing::OrfBlackLevels);
+    let blacks = fetch_tiff_tag!(ifd, OrfImageProcessing::OrfBlackLevels);
     let mut levels = [blacks.force_u16(0), blacks.force_u16(1), blacks.force_u16(2), blacks.force_u16(3)];
     if bps == 14 {
       // Blacklevel is encoded for 12 bits
@@ -402,22 +413,20 @@ impl<'a> OrfDecoder<'a> {
   }
 
   fn get_bits_per_pixel(&self) -> Result<Option<u16>> {
-    let ifd = self.makernote.find_ifds_with_tag(OrfImageProcessing::ValidBits);
-    if ifd.is_empty() {
+    let Some(ifd) = self.image_processing_ifd(OrfImageProcessing::ValidBits) else {
       return Ok(None);
-    }
-    Ok(Some(fetch_tiff_tag!(ifd[0], OrfImageProcessing::ValidBits).force_u16(0)))
+    };
+    Ok(Some(fetch_tiff_tag!(ifd, OrfImageProcessing::ValidBits).force_u16(0)))
   }
 
   fn get_crop(&self) -> Result<Option<Rect>> {
-    let ifd = self.makernote.find_ifds_with_tag(OrfImageProcessing::CropLeft);
-    if ifd.is_empty() {
+    let Some(ifd) = self.image_processing_ifd(OrfImageProcessing::CropLeft) else {
       return Ok(None);
-    }
-    let crop_left = fetch_tiff_tag!(ifd[0], OrfImageProcessing::CropLeft).force_usize(0);
-    let crop_top = fetch_tiff_tag!(ifd[0], OrfImageProcessing::CropTop).force_usize(0);
-    let crop_width = fetch_tiff_tag!(ifd[0], OrfImageProcessing::CropWidth).force_usize(0);
-    let crop_height = fetch_tiff_tag!(ifd[0], OrfImageProcessing::CropHeight).force_usize(0);
+    };
+    let crop_left = fetch_tiff_tag!(ifd, OrfImageProcessing::CropLeft).force_usize(0);
+    let crop_top = fetch_tiff_tag!(ifd, OrfImageProcessing::CropTop).force_usize(0);
+    let crop_width = fetch_tiff_tag!(ifd, OrfImageProcessing::CropWidth).force_usize(0);
+    let crop_height = fetch_tiff_tag!(ifd, OrfImageProcessing::CropHeight).force_usize(0);
     Ok(Some(Rect::new(Point::new(crop_left, crop_top), Dim2::new(crop_width, crop_height))))
   }
 
@@ -468,11 +477,10 @@ impl<'a> OrfDecoder<'a> {
     match (redmul, bluemul) {
       (Some(redmul), Some(bluemul)) => Ok([redmul.force_u32(0) as f32, 256.0, 256.0, bluemul.force_u32(0) as f32]),
       _ => {
-        let ifd = self.makernote.find_ifds_with_tag(OrfImageProcessing::OrfBlackLevels);
-        if ifd.is_empty() {
-          return Err(RawlerError::DecoderFailed("ORF: Couldn't find ImgProc IFD".to_string()));
-        }
-        let wbs = fetch_tiff_tag!(ifd[0], OrfImageProcessing::WB_RBLevels);
+        let ifd = self
+          .image_processing_ifd(OrfImageProcessing::WB_RBLevels)
+          .ok_or_else(|| RawlerError::DecoderFailed("ORF: Couldn't find ImgProc IFD".to_string()))?;
+        let wbs = fetch_tiff_tag!(ifd, OrfImageProcessing::WB_RBLevels);
         Ok([wbs.force_f32(0), 256.0, 256.0, wbs.force_f32(1)])
       }
     }
