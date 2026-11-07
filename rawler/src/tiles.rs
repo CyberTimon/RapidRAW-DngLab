@@ -323,7 +323,7 @@ mod tests {
   #[test]
   fn test_par_bridge() {
     #[rustfmt::skip]
-    let mut vec = vec![
+    let mut vec: Vec<u16> = vec![
       1,  2,    3,  4,   5,  6,
       7,  8,    9, 10,  11, 12,
 
