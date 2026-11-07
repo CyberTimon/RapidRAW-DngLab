@@ -8,6 +8,7 @@ use crate::{
 pub(crate) struct ColorData {
   pub(crate) version: i16,
   pub(crate) wb: [f32; 4],
+  pub(crate) as_shot_temperature: Option<u16>,
   pub(crate) blacklevel: Option<[u16; 4]>,
   pub(crate) normal_whitelevel: Option<u16>,
   pub(crate) specular_whitelevel: Option<u16>,
@@ -17,6 +18,11 @@ impl ColorData {
   fn new(data: &[u16], version: i16, wb_off: usize, black_off: Option<usize>, norm_white_off: Option<usize>, specular_white_off: Option<usize>) -> Self {
     log::debug!("Found Canon COLORDATA version: {}, data len: {}", version, data.len());
     let wb = [data[wb_off] as f32, data[wb_off + 1] as f32, data[wb_off + 2] as f32, data[wb_off + 3] as f32];
+    let temperature_offset = wb_off + if version < 0 { 7 } else { 4 };
+    let as_shot_temperature = data
+      .get(temperature_offset)
+      .copied()
+      .filter(|temperature| (1500..=50_000).contains(temperature));
     let blacklevel = black_off.map(|off| [data[off], data[off + 1], data[off + 2], data[off + 3]]);
     let normal_whitelevel = norm_white_off.map(|off| data[off]);
     let specular_whitelevel = specular_white_off.map(|off| data[off]);
@@ -24,6 +30,7 @@ impl ColorData {
     Self {
       version,
       wb,
+      as_shot_temperature,
       blacklevel,
       normal_whitelevel,
       specular_whitelevel,
@@ -141,5 +148,36 @@ pub(crate) fn parse_colordata(colordata: &Entry) -> Result<ColorData> {
       "Invalid COLORDATA tag: type {}",
       colordata.value_type_name()
     ))),
+  }
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  #[test]
+  fn reads_as_shot_temperature_after_white_balance_coefficients() {
+    let mut data = vec![0_u16; 80];
+    data[63..67].copy_from_slice(&[1889, 1024, 1024, 1522]);
+    data[67] = 4440;
+
+    let color_data = ColorData::new(&data, 7, 63, None, None, None);
+    assert_eq!(color_data.as_shot_temperature, Some(4440));
+  }
+
+  #[test]
+  fn reads_negative_version_color_coefficients_temperature_layout() {
+    let mut data = vec![0_u16; 80];
+    data[0x4e] = 4440;
+    let color_data = ColorData::new(&data, -4, 0x47, None, None, None);
+    assert_eq!(color_data.as_shot_temperature, Some(4440));
+  }
+
+  #[test]
+  fn rejects_invalid_as_shot_temperature() {
+    let mut data = vec![0_u16; 80];
+    data[67] = 500;
+    let color_data = ColorData::new(&data, 7, 63, None, None, None);
+    assert_eq!(color_data.as_shot_temperature, None);
   }
 }

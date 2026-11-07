@@ -298,6 +298,21 @@ impl<'a> Decoder for Cr2Decoder<'a> {
     Ok(mdata)
   }
 
+  fn as_shot_temperature(&self, file: &RawSource, _params: &RawDecodeParams) -> Result<Option<u32>> {
+    let recorded = self
+      .makernote
+      .as_ref()
+      .and_then(|makernote| makernote.get_entry(Cr2MakernoteTag::ColorData))
+      .map(colordata::parse_colordata)
+      .transpose()?
+      .and_then(|data| data.as_shot_temperature.map(u32::from));
+    if recorded.is_some() {
+      return Ok(recorded);
+    }
+    let wb = self.get_wb(file, &self.camera)?;
+    Ok(crate::imgop::xyz::estimate_as_shot_temperature(wb, &self.camera.color_matrix))
+  }
+
   fn xpacket(&self, _file: &RawSource, _params: &RawDecodeParams) -> Result<Option<Vec<u8>>> {
     Ok(self.xpacket.clone())
   }
