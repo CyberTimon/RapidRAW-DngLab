@@ -13,6 +13,7 @@ use crate::{
 
 use super::{
   Dim2, Rect, convert_from_f32_scaled_u16,
+  fuji_rotate::fuji_normalize_rotation,
   raw::{map_3ch_to_rgb, map_4ch_to_rgb},
   sensor::bayer::{
     bilinear::Bilinear4Channel, ppg::PPGDemosaic, superpixel::{Superpixel4Channel, SuperpixelQuarterRes3Channel}, Demosaic,
@@ -25,6 +26,7 @@ use super::{
 pub enum ProcessingStep {
   Rescale,
   Demosaic,
+  FujiRotate,
   CropActiveArea,
   WhiteBalance,
   Calibrate,
@@ -99,6 +101,7 @@ impl Default for RawDevelop {
       steps: vec![
         ProcessingStep::Rescale,
         ProcessingStep::Demosaic,
+        ProcessingStep::FujiRotate,
         ProcessingStep::CropActiveArea,
         ProcessingStep::WhiteBalance,
         ProcessingStep::Calibrate,
@@ -169,31 +172,46 @@ impl RawDevelop {
             };
             if config.cfa.is_rgb() {
               // Check if this is an X-Trans sensor (6x6 pattern) 
-              if config.cfa.width == 6 && config.cfa.height == 6 {
+              let mut rgb = if config.cfa.width == 6 && config.cfa.height == 6 {
                 log::info!("X-Trans pattern (6x6) detected. Applying X-Trans demosaicing ({:?}).", self.demosaic_algorithm);
                 match self.demosaic_algorithm {
                   DemosaicAlgorithm::Quality => {
                     let xtrans_demosaic = XTransDemosaic::new();
-                    Intermediate::ThreeColor(xtrans_demosaic.demosaic(pixels, &config.cfa, &config.colors, roi))
+                    xtrans_demosaic.demosaic(pixels, &config.cfa, &config.colors, roi)
                   }
                   DemosaicAlgorithm::Speed => {
                     let xtrans_demosaic = XTransSuperpixelDemosaic::new();
-                    Intermediate::ThreeColor(xtrans_demosaic.demosaic(pixels, &config.cfa, &config.colors, roi))
+                    xtrans_demosaic.demosaic(pixels, &config.cfa, &config.colors, roi)
                   }
                 }
               } else {
-                  log::info!("RGB Bayer-like pattern detected. Applying Bayer demosaicing.");
-                  match self.demosaic_algorithm {
-                      DemosaicAlgorithm::Quality => {
-                          let ppg = PPGDemosaic::new();
-                          Intermediate::ThreeColor(ppg.demosaic(pixels, &config.cfa, &config.colors, roi))
-                      }
-                      DemosaicAlgorithm::Speed => {
-                          let superpixel = SuperpixelQuarterRes3Channel::new();
-                          Intermediate::ThreeColor(superpixel.demosaic(pixels, &config.cfa, &config.colors, roi))
-                      }
+                log::info!("RGB Bayer-like pattern detected. Applying Bayer demosaicing.");
+                match self.demosaic_algorithm {
+                  DemosaicAlgorithm::Quality => {
+                    let ppg = PPGDemosaic::new();
+                    ppg.demosaic(pixels, &config.cfa, &config.colors, roi)
                   }
+                  DemosaicAlgorithm::Speed => {
+                    let superpixel = SuperpixelQuarterRes3Channel::new();
+                    superpixel.demosaic(pixels, &config.cfa, &config.colors, roi)
+                  }
+                }
+              };
+
+              if self.steps.contains(&ProcessingStep::FujiRotate)
+                && let Some(rotation_width) = rawimage.fuji_rotation_width
+              {
+                let demosaic_scale = rgb.width as f32 / pixels.width as f32;
+                let scaled_rotation_width = ((rotation_width as f32) * demosaic_scale).round() as usize;
+                let extra_rotate = rawimage.camera.find_hint("fuji_rotate_90cw");
+                rgb = fuji_normalize_rotation(&rgb, scaled_rotation_width, extra_rotate);
+                if let Some(crop) = rawimage.crop_area.as_mut()
+                  && (demosaic_scale - 1.0).abs() > f32::EPSILON
+                {
+                  crop.scale(demosaic_scale);
+                }
               }
+              Intermediate::ThreeColor(rgb)
             } else if config.cfa.unique_colors() == 4 {
                 log::info!("4-Color pattern detected. Applying 4-channel demosaicing.");
                 match self.demosaic_algorithm {
@@ -269,11 +287,11 @@ impl RawDevelop {
           }
         }
         let original_width = rawimage.active_area.map(|area| area.d.w).unwrap_or(rawimage.dim().w);
-        if original_width > 0 {
-            let scale_factor = intermediate.dim().w as f32 / original_width as f32;
-            if (scale_factor - 1.0).abs() > 1e-6 {
-                crop.scale(scale_factor);
-            }
+        if rawimage.fuji_rotation_width.is_none() && original_width > 0 {
+          let scale_factor = intermediate.dim().w as f32 / original_width as f32;
+          if (scale_factor - 1.0).abs() > 1e-6 {
+            crop.scale(scale_factor);
+          }
         }
         if !crop.is_empty() && crop.d != intermediate.dim() {
           log::info!("crop: {:?}, intermediate dim: {:?}, rawimage: {:?}", crop, intermediate.dim(), rawimage.dim());
