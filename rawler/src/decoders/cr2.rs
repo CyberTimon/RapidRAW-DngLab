@@ -561,6 +561,16 @@ impl<'a> Cr2Decoder<'a> {
       ])
     } else if let Some(levels) = self.tiff.get_entry(TiffCommonTag::Cr2OldWB) {
       Ok([levels.force_f32(0), levels.force_f32(1), levels.force_f32(2), f32::NAN])
+    } else if let Some(table) = self.makernote.as_ref().and_then(|mn| mn.get_entry(Cr2MakernoteTag::WhiteBalanceTable)) {
+      // EOS-1D/1Ds: one 24-entry block per WB preset, selected by ShotInfo WhiteBalance (index 7)
+      let preset = self
+        .makernote
+        .as_ref()
+        .and_then(|mn| mn.get_entry(Cr2MakernoteTag::ShotInfo))
+        .map_or(0, |info| info.force_usize(7));
+      let offset = if (preset + 1) * 24 <= table.count() as usize { preset * 24 } else { 0 };
+      let green = table.force_f32(offset + 1);
+      Ok(normalize_wb([table.force_f32(offset), green, green, table.force_f32(offset + 2)]))
     } else {
       // At least the D2000 has no WB
       Ok([f32::NAN, f32::NAN, f32::NAN, f32::NAN])
