@@ -26,6 +26,7 @@ use crate::formats::tiff::*;
 use crate::imgop::Dim2;
 use crate::imgop::Point;
 use crate::imgop::Rect;
+use crate::imgop::fuji_rotate::fuji_calc_dimension;
 use crate::packed::*;
 use crate::pixarray::PixU16;
 use crate::rawimage::BlackLevel;
@@ -324,12 +325,13 @@ impl<'a> Decoder for RafDecoder<'a> {
     let cpp = 1;
     if self.camera.find_hint("fuji_rotation") || self.camera.find_hint("fuji_rotation_alt") {
       log::debug!("Apply Fuji image rotation");
-      let rotated = if rotate_for_dng {
-        if self.camera.find_hint("fuji_rotation") {
+      let (rotated, fuji_rotation_width) = if rotate_for_dng {
+        let pixels = if self.camera.find_hint("fuji_rotation") {
           fuji_raw_rotate(&image, dummy) // Only required for fuji_rotation
         } else {
           image
-        }
+        };
+        (pixels, None)
       } else {
         self.rotate_image(image.pixels(), &self.camera, width, height, dummy)?
       };
@@ -347,6 +349,7 @@ impl<'a> Decoder for RafDecoder<'a> {
         None,
         dummy,
       );
+      image.fuji_rotation_width = fuji_rotation_width;
 
       if rotate_for_dng {
         image.add_dng_tag(TiffCommonTag::CFARepeatPatternDim, [2, 4]);
@@ -360,7 +363,12 @@ impl<'a> Decoder for RafDecoder<'a> {
 
       // Reset crops because we have rotated the data.
       image.active_area = None;
-      image.crop_area = None;
+      image.crop_area = fuji_rotation_width.and_then(|rotation_width| {
+        image.camera.crop_area.map(|crop| {
+          let rotated_dim = fuji_calc_dimension(image.width, rotation_width);
+          Rect::new_with_borders(rotated_dim, &crop)
+        })
+      });
       Ok(image)
     } else {
       //ok_image(self.camera.clone(), width, height, cpp, self.get_wb()?, image.into_inner())
@@ -540,7 +548,7 @@ impl<'a> RafDecoder<'a> {
     Ok(file.subview(jpeg_off, jpeg_len)?)
   }
 
-  fn rotate_image(&self, src: &[u16], camera: &Camera, width: usize, height: usize, dummy: bool) -> Result<PixU16> {
+  fn rotate_image(&self, src: &[u16], camera: &Camera, width: usize, height: usize, dummy: bool) -> Result<(PixU16, Option<usize>)> {
     if let Some(active_area) = self.camera.active_area {
       let x = active_area[0];
       let y = active_area[1];
@@ -562,7 +570,7 @@ impl<'a> RafDecoder<'a> {
             }
           }
         }
-        Ok(out)
+        Ok((out, Some(cropheight)))
       } else {
         let rotatedwidth = cropwidth + cropheight / 2;
         let rotatedheight = rotatedwidth - 1;
@@ -578,7 +586,7 @@ impl<'a> RafDecoder<'a> {
             }
           }
         }
-        Ok(out)
+        Ok((out, Some(cropwidth)))
       }
     } else {
       Err(RawlerError::DecoderFailed("no active_area for fuji_rotate".to_string()))

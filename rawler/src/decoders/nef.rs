@@ -216,7 +216,9 @@ impl<'a> Decoder for NefDecoder<'a> {
     // Because the strips has no holes between and are perfectly aligned, we can process the whole
     // chunk at once, instead of iterating over every strip.
     // It would be safer to process each strip offset, but it is not need for any known model so far.
-    let src = if rows_per_strip == height {
+    let src = if dummy {
+      PaddedBuf::new_owned(Vec::new(), 0)
+    } else if rows_per_strip == height {
       file.subview_padded(offset as u64, size as u64)?
     } else {
       let full_size: u32 = match fetch_tiff_tag!(raw, TiffCommonTag::StripByteCounts) {

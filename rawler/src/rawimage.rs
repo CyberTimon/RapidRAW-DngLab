@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::Result;
 use crate::cfa::PlaneColor;
-use crate::imgop::raw::{correct_blacklevel, correct_blacklevel_cfa};
+use crate::imgop::raw::{correct_blacklevel_cfa, correct_blacklevel_linear};
 use crate::imgop::{convert_from_f32_scaled_u16, convert_to_f32_unscaled};
 use crate::pixarray::SubPixel;
 use crate::{
@@ -239,6 +239,10 @@ pub struct RawImage {
   pub color_matrix: HashMap<Illuminant, FlatColorMatrix>,
 
   pub dng_tags: HashMap<u16, Value>,
+
+  /// For rotated Fuji sensors, the split point used to calculate the
+  /// inscribed rectangle after the final 45-degree rotation.
+  pub fuji_rotation_width: Option<usize>,
 }
 
 /// The actual image data, after decoding
@@ -389,6 +393,7 @@ impl RawImage {
       orientation: Orientation::Normal, //cam.orientation, // TODO fixme
       color_matrix: cam.color_matrix,
       dng_tags: HashMap::new(),
+      fuji_rotation_width: None,
     }
   }
 
@@ -478,6 +483,7 @@ impl RawImage {
       orientation: Orientation::Normal, //cam.orientation, // TODO fixme
       color_matrix: cam.color_matrix,
       dng_tags: HashMap::new(),
+      fuji_rotation_width: None,
     }
   }
 
@@ -519,7 +525,16 @@ impl RawImage {
         self.data = RawImageData::Float(pixels.into_owned());
       }
       RawPhotometricInterpretation::LinearRaw => {
-        correct_blacklevel(pixels.to_mut(), &self.blacklevel.as_vec(), &self.whitelevel.as_vec());
+        let blacklevel_origin = self.active_area.map(|area| area.p).unwrap_or_else(Point::zero);
+        correct_blacklevel_linear(
+          pixels.to_mut(),
+          self.width,
+          self.height,
+          self.cpp,
+          &self.blacklevel,
+          &self.whitelevel,
+          blacklevel_origin,
+        )?;
         self.data = RawImageData::Float(pixels.into_owned());
       }
     }

@@ -1,3 +1,4 @@
+use image::DynamicImage;
 use std::cmp;
 use std::io::Read;
 use std::io::Seek;
@@ -87,6 +88,17 @@ pub fn parse_makernote<R: Read + Seek>(reader: &mut R, exif_ifd: &IFD) -> Result
           mainifd.sub.insert(OrfMakernotes::EquipmentIFD.into(), vec![ifd]);
         }
 
+        if let Ok(Some(entry)) = mainifd.get_entry_raw_with_len(OrfMakernotes::CameraSettingsIFD, reader, 4) {
+          let ioff = entry.get_force_u32(0);
+          log::debug!("Found CameraSettingsIFD at offset: {}", ioff);
+          match IFD::new(reader, ioff, offset, 0, endian, &[]) {
+            Ok(ifd) => {
+              mainifd.sub.insert(OrfMakernotes::CameraSettingsIFD.into(), vec![ifd]);
+            }
+            Err(err) => log::debug!("ORF CameraSettingsIFD unreadable: {}", err),
+          }
+        }
+
         // For Olympus or OM-System models
         if off == 12 || off == 16 {
           // Parse the Olympus ImgProc section if it exists
@@ -140,6 +152,31 @@ impl<'a> OrfDecoder<'a> {
 }
 
 impl<'a> Decoder for OrfDecoder<'a> {
+  fn preview_image(&self, file: &RawSource, params: &RawDecodeParams) -> Result<Option<DynamicImage>> {
+    if params.image_index != 0 {
+      return Ok(None);
+    }
+    let Some(settings) = self.makernote.get_sub_ifd(OrfMakernotes::CameraSettingsIFD) else {
+      return Ok(None);
+    };
+    if settings.get_entry(OrfCameraSettings::PreviewImageValid).map(|e| e.force_u32(0)) == Some(0) {
+      return Ok(None);
+    }
+    let (Some(start), Some(len)) = (
+      settings.get_entry(OrfCameraSettings::PreviewImageStart).map(|e| e.force_u32(0)),
+      settings.get_entry(OrfCameraSettings::PreviewImageLength).map(|e| e.force_u32(0)),
+    ) else {
+      return Ok(None);
+    };
+    if len == 0 {
+      return Ok(None);
+    }
+    let Ok(jpeg) = file.subview(settings.base as u64 + start as u64, len as u64) else {
+      return Ok(None);
+    };
+    Ok(image::load_from_memory_with_format(jpeg, image::ImageFormat::Jpeg).ok())
+  }
+
   fn raw_image(&self, file: &RawSource, _params: &RawDecodeParams, dummy: bool) -> Result<RawImage> {
     let raw = self
       .tiff
@@ -457,6 +494,7 @@ fn normalize_wb(raw_wb: [f32; 4]) -> [f32; 4] {
 crate::tags::tiff_tag_enum!(OrfMakernotes);
 crate::tags::tiff_tag_enum!(OrfImageProcessing);
 crate::tags::tiff_tag_enum!(OrfEquipmentTags);
+crate::tags::tiff_tag_enum!(OrfCameraSettings);
 
 #[allow(non_camel_case_types)]
 #[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
@@ -467,6 +505,16 @@ pub enum OrfMakernotes {
   OlympusRedMul = 0x1017,
   OlympusBlueMul = 0x1018,
   EquipmentIFD = 0x2010,
+  CameraSettingsIFD = 0x2020,
+}
+
+#[allow(non_camel_case_types)]
+#[derive(Debug, Copy, Clone, PartialEq, enumn::N)]
+#[repr(u16)]
+pub enum OrfCameraSettings {
+  PreviewImageValid = 0x0100,
+  PreviewImageStart = 0x0101,
+  PreviewImageLength = 0x0102,
 }
 
 #[allow(non_camel_case_types)]
