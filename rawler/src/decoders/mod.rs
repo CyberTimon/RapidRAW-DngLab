@@ -671,6 +671,12 @@ pub(crate) fn plain_image_from_ifd(ifd: &IFD, rawsource: &RawSource) -> Result<R
           let predictor = fetch_tiff_tag!(ifd, TiffCommonTag::Predictor).force_u16(0);
           decode_tiles::<f32>(&mut pixbuf, rawsource, ifd, DeflateDecompressor::new(cpp, predictor, bits, endian))?;
         }
+        (CompressionMethod::JPEGXL, DataMode::Strips) => {
+          decode_strips::<f32>(&mut pixbuf, rawsource, ifd, JpegXLDecompressor::new(bits))?;
+        }
+        (CompressionMethod::JPEGXL, DataMode::Tiles) => {
+          decode_tiles::<f32>(&mut pixbuf, rawsource, ifd, JpegXLDecompressor::new(bits))?;
+        }
         _ => {
           return Err(RawlerError::DecoderFailed(format!(
             "Unsupported compression method: {:?}, storage: {:?}",
